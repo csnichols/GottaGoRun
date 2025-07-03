@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "505550373949",
+    "project_id": "gottagorun-df4cf",
+    "storage_bucket": "gottagorun-df4cf.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:505550373949:android:c79517ddb0c428ffe31654",
+        "android_client_info": {
+          "package_name": "com.example.gottagorun"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAOI1Fdh--xmSPB41-wUv0h1b1BafzvjTE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

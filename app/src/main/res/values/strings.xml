@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">GottaGoRun</string>
+    <string name="google_maps_key" translatable="false">AIzaSyAOI1Fdh--xmSPB41-wUv0h1b1BafzvjTE</string>
+</resources>
