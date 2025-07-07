@@ -20,6 +20,8 @@ class PlannedRunAdapter(
     override fun onBindViewHolder(holder: PlannedRunViewHolder, position: Int) {
         val plannedRun = plannedRuns[position]
         holder.binding.textViewRouteName.text = plannedRun.name
+
+
         val distanceInKm = plannedRun.distanceInMeters / 1000.0
         holder.binding.textViewRouteDistance.text = String.format("Distance: %.2f km", distanceInKm)
 

@@ -5,18 +5,12 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="?attr/colorSurface"
+    android:background="@color/home_background_dark"
     tools:context=".PlannedRoutesActivity">
 
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Planned Routes"
-        android:textSize="24sp"
-        android:textStyle="bold"
-        android:textColor="?attr/colorPrimary"
-        android:padding="16dp"
-        android:gravity="center"/>
+    <include
+        android:id="@+id/toolbar_layout"
+        layout="@layout/toolbar_main" />
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/recyclerViewPlannedRuns"

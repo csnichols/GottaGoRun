@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Back ground app color-->
+    <color name="home_background_dark">#263238</color>
+
     <!-- Primary App Colors -->
     <color name="md_theme_primary">#00658E</color>
     <color name="md_theme_onPrimary">#FFFFFF</color>
@@ -20,4 +23,7 @@
     <color name="md_theme_surfaceVariant">#DDE3EA</color>
     <color name="md_theme_onSurfaceVariant">#41484D</color>
     <color name="md_theme_outline">#71787E</color>
+
+    <color name="calendar_day_text_color">#FFFFFF</color>
+    <color name="calendar_day_has_run_color">#80C7E7FF</color> <!-- A semi-transparent blue -->
 </resources>

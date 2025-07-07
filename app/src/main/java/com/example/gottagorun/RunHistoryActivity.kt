@@ -1,5 +1,6 @@
 package com.example.gottagorun
 
+import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -22,6 +23,10 @@ class RunHistoryActivity : AppCompatActivity() {
         binding = ActivityRunHistoryBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        setSupportActionBar(binding.toolbarLayout.toolbar)
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        supportActionBar?.title = "Run History"
+
         auth = FirebaseAuth.getInstance()
         db = FirebaseFirestore.getInstance()
 
@@ -29,8 +34,19 @@ class RunHistoryActivity : AppCompatActivity() {
         fetchRuns()
     }
 
+    override fun onSupportNavigateUp(): Boolean {
+        onBackPressed()
+        return true
+    }
+
     private fun setupRecyclerView() {
-        runAdapter = RunAdapter(runsList)
+        runAdapter = RunAdapter(runsList) { clickedRun ->
+            // This is the click listener logic
+            val intent = Intent(this, RunDetailActivity::class.java).apply {
+                putExtra("RUN_ID", clickedRun.documentId)
+            }
+            startActivity(intent)
+        }
         binding.recyclerViewRuns.apply {
             adapter = runAdapter
             layoutManager = LinearLayoutManager(this@RunHistoryActivity)
@@ -47,7 +63,7 @@ class RunHistoryActivity : AppCompatActivity() {
                     runsList.clear()
                     for (document in documents) {
                         val run = document.toObject(Run::class.java)
-                        run.documentId = document.id // <-- ADD THIS LINE to store the ID
+                        run.documentId = document.id
                         runsList.add(run)
                     }
                     runAdapter.notifyDataSetChanged()

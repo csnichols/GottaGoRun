@@ -8,9 +8,10 @@ import android.content.res.Configuration
 import android.graphics.Color
 import android.location.Location
 import android.os.Bundle
-import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.Menu
+import android.view.MenuItem
 import android.view.View
 import android.widget.EditText
 import android.widget.Toast
@@ -18,7 +19,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.example.gottagorun.databinding.ActivityMainBinding
 import com.google.android.gms.location.*
 import com.google.android.gms.maps.CameraUpdateFactory
@@ -27,11 +28,20 @@ import com.google.android.gms.maps.OnMapReadyCallback
 import com.google.android.gms.maps.model.*
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ktx.toObject
 import com.google.maps.DirectionsApi
+import com.google.maps.ElevationApi
 import com.google.maps.GeoApiContext
 import com.google.maps.android.PolyUtil
 import com.google.maps.model.Distance
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.IOException
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.Dispatchers
 
 class MainActivity : AppCompatActivity(), OnMapReadyCallback {
 
@@ -43,7 +53,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
     private lateinit var geoApiContext: GeoApiContext
 
     // State Management
-    private enum class AppState { IDLE, TRACKING, PLANNING }
+    private enum class AppState { IDLE, TRACKING, PAUSED, PLANNING }
     private var currentState = AppState.IDLE
 
     // Planning variables
@@ -54,40 +64,34 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
 
     // Run tracking variables
     private var pathPoints = mutableListOf<LatLng>()
+    private var liveRoutePolyline: Polyline? = null
     private lateinit var locationCallback: LocationCallback
     private var totalDistance = 0f
-    private var startTime = 0L
-    private val timerHandler = Handler(Looper.getMainLooper())
-    private val timerRunnable = object : Runnable {
-        override fun run() {
-            val millis = System.currentTimeMillis() - startTime
-            val seconds = (millis / 1000).toInt()
-            val minutes = seconds / 60
-            val remainingSeconds = seconds % 60
-            binding.textViewTime.text = String.format("Time: %02d:%02d", minutes, remainingSeconds)
-            timerHandler.postDelayed(this, 1000)
-        }
-    }
+    private var timeRunInMillis = 0L
+    private var timerJob: Job? = null
 
     private val plannedRouteResultLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
-            val runId = result.data?.getStringExtra("SELECTED_RUN_ID")
-            if (runId != null) {
-                fetchAndDisplayPlannedRoute(runId)
-            }
+            result.data?.getStringExtra("SELECTED_RUN_ID")?.let { fetchAndDisplayPlannedRoute(it) }
         }
     }
 
     companion object {
         private const val LOCATION_PERMISSION_REQUEST_CODE = 1
+        private const val ELEVATION_API_CHUNK_SIZE = 500
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        setSupportActionBar(binding.toolbarLayout.toolbar)
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        supportActionBar?.setHomeAsUpIndicator(R.drawable.ic_home)
+        supportActionBar?.title = "Map"
 
         auth = FirebaseAuth.getInstance()
         db = FirebaseFirestore.getInstance()
@@ -106,39 +110,51 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
     }
 
     private fun setupClickListeners() {
-        binding.buttonLogout.setOnClickListener {
-            auth.signOut()
-            val intent = Intent(this, LoginActivity::class.java)
-            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-            startActivity(intent)
-            finish()
-        }
-
-        binding.buttonHistory.setOnClickListener {
-            val intent = Intent(this, RunHistoryActivity::class.java)
-            startActivity(intent)
-        }
-
-        binding.buttonPlannedRoutes.setOnClickListener {
-            val intent = Intent(this, PlannedRoutesActivity::class.java)
-            plannedRouteResultLauncher.launch(intent)
-        }
-
         binding.buttonAction.setOnClickListener {
             when (currentState) {
-                AppState.IDLE -> startTracking()
-                AppState.TRACKING -> stopTracking()
-                AppState.PLANNING -> { /* TODO: Logic for starting a planned run */ }
+                AppState.IDLE, AppState.PLANNING -> startTracking()
+                AppState.TRACKING -> pauseTracking()
+                else -> {}
             }
         }
+        binding.buttonResume.setOnClickListener { resumeTracking() }
+        binding.buttonEnd.setOnClickListener { stopTracking() }
+        binding.buttonSavePlan.setOnClickListener { showSaveRouteDialog() }
+    }
 
-        binding.buttonPlanRoute.setOnClickListener {
-            val newState = if (currentState == AppState.PLANNING) AppState.IDLE else AppState.PLANNING
-            updateUIForState(newState)
-        }
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.main_menu, menu)
+        return true
+    }
 
-        binding.buttonSavePlan.setOnClickListener {
-            showSaveRouteDialog()
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        return when (item.itemId) {
+            android.R.id.home -> {
+                finish() // This correctly handles the "up" button (home icon)
+                true
+            }
+            R.id.action_plan_route -> {
+                val newState = if (currentState == AppState.PLANNING) AppState.IDLE else AppState.PLANNING
+                updateUIForState(newState)
+                true
+            }
+            R.id.action_history -> {
+                startActivity(Intent(this, RunHistoryActivity::class.java))
+                true
+            }
+            R.id.action_planned_routes -> {
+                plannedRouteResultLauncher.launch(Intent(this, PlannedRoutesActivity::class.java))
+                true
+            }
+            R.id.action_logout -> {
+                auth.signOut()
+                val intent = Intent(this, LoginActivity::class.java)
+                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                startActivity(intent)
+                finish()
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
         }
     }
 
@@ -148,31 +164,148 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
             AppState.IDLE -> {
                 binding.statsContainer.visibility = View.INVISIBLE
                 binding.planningContainer.visibility = View.GONE
-                binding.topButtonsContainer.visibility = View.VISIBLE
+                binding.pauseContainer.visibility = View.GONE
                 binding.buttonAction.visibility = View.VISIBLE
                 binding.buttonAction.text = "Start Run"
-                binding.buttonAction.icon = ContextCompat.getDrawable(this, android.R.drawable.ic_media_play)
-                binding.buttonPlanRoute.text = "Plan Route"
+                binding.buttonAction.setIconResource(android.R.drawable.ic_media_play)
                 clearMap()
             }
             AppState.TRACKING -> {
                 binding.statsContainer.visibility = View.VISIBLE
                 binding.planningContainer.visibility = View.GONE
-                binding.topButtonsContainer.visibility = View.GONE
+                binding.pauseContainer.visibility = View.GONE
                 binding.buttonAction.visibility = View.VISIBLE
-                binding.buttonAction.text = "Stop Run"
-                binding.buttonAction.icon = ContextCompat.getDrawable(this, android.R.drawable.ic_media_pause)
+                binding.buttonAction.text = "Pause"
+                binding.buttonAction.setIconResource(android.R.drawable.ic_media_pause)
+            }
+            AppState.PAUSED -> {
+                binding.statsContainer.visibility = View.VISIBLE
+                binding.planningContainer.visibility = View.GONE
+                binding.pauseContainer.visibility = View.VISIBLE
+                binding.buttonAction.visibility = View.GONE
             }
             AppState.PLANNING -> {
                 binding.statsContainer.visibility = View.INVISIBLE
                 binding.planningContainer.visibility = View.VISIBLE
-                binding.topButtonsContainer.visibility = View.VISIBLE
                 binding.buttonAction.visibility = View.GONE
-                binding.buttonPlanRoute.text = "Cancel Planning"
                 binding.textViewPlanningInstructions.text = "Tap on the map to set a start point."
                 binding.buttonSavePlan.visibility = View.GONE
                 clearMap()
             }
+        }
+    }
+
+    private fun startTracking() {
+        clearMap()
+        pathPoints.clear()
+        totalDistance = 0f
+        timeRunInMillis = 0L
+        binding.textViewDistance.text = "Dist: 0.00 km"
+        binding.textViewTime.text = "Time: 00:00:00"
+
+        updateUIForState(AppState.TRACKING)
+        startTimer()
+        startLocationUpdates()
+    }
+
+    private fun pauseTracking() {
+        if (currentState != AppState.TRACKING) return
+        updateUIForState(AppState.PAUSED)
+        timerJob?.cancel()
+        fusedLocationClient.removeLocationUpdates(locationCallback)
+    }
+
+    private fun resumeTracking() {
+        if (currentState != AppState.PAUSED) return
+        updateUIForState(AppState.TRACKING)
+        startTimer()
+        startLocationUpdates()
+    }
+
+    private fun stopTracking() {
+        fusedLocationClient.removeLocationUpdates(locationCallback)
+        timerJob?.cancel()
+        if (pathPoints.size > 1) {
+            calculateElevationAndSaveRun()
+        }
+        updateUIForState(AppState.IDLE)
+    }
+
+    private fun startTimer() {
+        timerJob?.cancel()
+        timerJob = lifecycleScope.launch {
+            var lastTimestamp = System.currentTimeMillis()
+            while (true) {
+                delay(1000)
+                val now = System.currentTimeMillis()
+                timeRunInMillis += now - lastTimestamp
+                lastTimestamp = now
+
+                val seconds = (timeRunInMillis / 1000).toInt()
+                val minutes = seconds / 60
+                val hours = minutes / 60
+                binding.textViewTime.text = String.format("Time: %02d:%02d:%02d", hours, minutes % 60, seconds % 60)
+            }
+        }
+    }
+
+    private fun calculateElevationAndSaveRun() = lifecycleScope.launch {
+        if (pathPoints.size < 2) {
+            saveRunToFirebase(0.0)
+            return@launch
+        }
+        try {
+            val allElevationResults = withContext(Dispatchers.IO) {
+                val locations = pathPoints.map { com.google.maps.model.LatLng(it.latitude, it.longitude) }
+                val aggregatedResults = mutableListOf<com.google.maps.model.ElevationResult>()
+                locations.chunked(ELEVATION_API_CHUNK_SIZE).forEach { chunk ->
+                    val chunkResult = ElevationApi.getByPoints(geoApiContext, *chunk.toTypedArray()).await()
+                    aggregatedResults.addAll(chunkResult)
+                }
+                aggregatedResults
+            }
+
+            var totalElevationGain = 0.0
+            if (allElevationResults.isNotEmpty()) {
+                for (i in 0 until allElevationResults.size - 1) {
+                    val elevationDiff = allElevationResults[i + 1].elevation - allElevationResults[i].elevation
+                    if (elevationDiff > 0) {
+                        totalElevationGain += elevationDiff
+                    }
+                }
+            }
+            saveRunToFirebase(totalElevationGain)
+
+        } catch (e: com.google.maps.errors.ApiException) {
+            Log.e("ElevationAPI", "Google Maps API Error: ${e.message}", e)
+            Toast.makeText(this@MainActivity, "API Error: Could not retrieve elevation. ${e.message}", Toast.LENGTH_LONG).show()
+            saveRunToFirebase(0.0)
+        } catch (e: IOException) {
+            Log.e("ElevationAPI", "Network Error getting elevation data", e)
+            Toast.makeText(this@MainActivity, "Network error. Saving run without elevation data.", Toast.LENGTH_LONG).show()
+            saveRunToFirebase(0.0)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.e("ElevationAPI", "Unknown error getting elevation data", e)
+            Toast.makeText(this@MainActivity, "Could not fetch elevation data. Saving run without it.", Toast.LENGTH_LONG).show()
+            saveRunToFirebase(0.0)
+        }
+    }
+
+    private fun saveRunToFirebase(elevationGain: Double) {
+        val userId = auth.currentUser?.uid?: return
+        if (pathPoints.isNotEmpty()) {
+            val runData = hashMapOf(
+                "timestamp" to System.currentTimeMillis(),
+                "distanceInMeters" to totalDistance,
+                "timeInMillis" to timeRunInMillis,
+                "totalElevationGain" to elevationGain,
+                "pathPoints" to pathPoints.map { mapOf("latitude" to it.latitude, "longitude" to it.longitude) }
+            )
+            db.collection("users").document(userId).collection("runs")
+                .add(runData)
+                .addOnSuccessListener { Toast.makeText(this, "Run saved successfully!", Toast.LENGTH_SHORT).show() }
+                .addOnFailureListener { e -> Toast.makeText(this, "Failed to save run: ${e.message}", Toast.LENGTH_SHORT).show() }
         }
     }
 
@@ -187,40 +320,40 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
                 getDirections(startMarker!!.position, endMarker!!.position)
             } else {
                 clearMap()
+                updateUIForState(AppState.PLANNING)
                 binding.textViewPlanningInstructions.text = "Tap on the map to set a start point."
             }
         }
     }
 
-    private fun getDirections(origin: LatLng, destination: LatLng) {
-        Thread {
-            try {
-                val directionsResult = DirectionsApi.newRequest(geoApiContext)
+    private fun getDirections(origin: LatLng, destination: LatLng) = lifecycleScope.launch {
+        try {
+            val directionsResult = withContext(Dispatchers.IO) {
+                val request = DirectionsApi.newRequest(geoApiContext)
                     .origin(com.google.maps.model.LatLng(origin.latitude, origin.longitude))
                     .destination(com.google.maps.model.LatLng(destination.latitude, destination.longitude))
-                    .await()
-
-                Handler(Looper.getMainLooper()).post {
-                    if (directionsResult.routes.isNotEmpty()) {
-                        val route = directionsResult.routes[0]
-                        val decodedPath = PolyUtil.decode(route.overviewPolyline.encodedPath)
-                        plannedRoutePolyline = googleMap?.addPolyline(PolylineOptions().addAll(decodedPath).color(Color.MAGENTA).width(12f))
-
-                        plannedDistance = route.legs[0].distance
-                        binding.textViewPlanningInstructions.text = "Planned Distance: ${plannedDistance?.humanReadable}"
-                        binding.buttonSavePlan.visibility = View.VISIBLE
-                    } else {
-                        binding.textViewPlanningInstructions.text = "No route found. Tap to reset."
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e("DirectionsAPI", "Error getting directions", e)
-                Handler(Looper.getMainLooper()).post {
-                    Toast.makeText(this, "Directions API Error: ${e.message}", Toast.LENGTH_LONG).show()
-                    binding.textViewPlanningInstructions.text = "Error finding route. Tap to reset."
-                }
+                request.await()
             }
-        }.start()
+
+            if (directionsResult.routes.isNotEmpty()) {
+                val route = directionsResult.routes[0]
+                val decodedPath = PolyUtil.decode(route.overviewPolyline.encodedPath)
+                plannedRoutePolyline = googleMap?.addPolyline(PolylineOptions().addAll(decodedPath).color(Color.MAGENTA).width(12f))
+
+                if (route.legs.isNotEmpty()) {
+                    plannedDistance = route.legs[0].distance
+                    binding.textViewPlanningInstructions.text = "Planned Distance: ${plannedDistance?.humanReadable}"
+                    binding.buttonSavePlan.visibility = View.VISIBLE
+                }
+            } else {
+                binding.textViewPlanningInstructions.text = "No route found. Tap to reset."
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.e("DirectionsAPI", "Error getting directions", e)
+            Toast.makeText(this@MainActivity, "Directions API Error: ${e.message}", Toast.LENGTH_LONG).show()
+            binding.textViewPlanningInstructions.text = "Error finding route. Tap to reset."
+        }
     }
 
     private fun showSaveRouteDialog() {
@@ -233,14 +366,13 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
 
         builder.setPositiveButton("Save") { _, _ ->
             val routeName = input.text.toString()
-            if (routeName.isNotEmpty()) {
+            if (routeName.isNotBlank()) {
                 savePlannedRouteToFirebase(routeName)
             } else {
                 Toast.makeText(this, "Please enter a name for the route.", Toast.LENGTH_SHORT).show()
             }
         }
         builder.setNegativeButton("Cancel") { dialog, _ -> dialog.cancel() }
-
         builder.show()
     }
 
@@ -250,7 +382,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         val end = endMarker?.position
         val polyline = plannedRoutePolyline
 
-        if (userId != null && start != null && end != null && polyline != null && plannedDistance != null) {
+        if (userId!= null && start!= null && end!= null && polyline!= null && plannedDistance!= null) {
             val routeData = hashMapOf(
                 "name" to routeName,
                 "distanceInMeters" to plannedDistance!!.inMeters,
@@ -260,8 +392,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
                 "timestamp" to System.currentTimeMillis()
             )
 
-            db.collection("users").document(userId).collection("planned_routes")
-                .add(routeData)
+            db.collection("users").document(userId).collection("planned_routes").add(routeData)
                 .addOnSuccessListener {
                     Toast.makeText(this, "Planned route saved!", Toast.LENGTH_SHORT).show()
                     updateUIForState(AppState.IDLE)
@@ -275,23 +406,25 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
     }
 
     private fun fetchAndDisplayPlannedRoute(runId: String) {
-        val userId = auth.currentUser?.uid ?: return
+        val userId = auth.currentUser?.uid?: return
         db.collection("users").document(userId).collection("planned_routes").document(runId)
             .get()
             .addOnSuccessListener { document ->
-                val plannedRun = document.toObject(PlannedRun::class.java)
-                if (plannedRun != null) {
+                if (!document.exists()) {
+                    Toast.makeText(this, "Planned route not found.", Toast.LENGTH_SHORT).show()
+                    return@addOnSuccessListener
+                }
+                val plannedRun = document.toObject<PlannedRun>()
+                if (plannedRun!= null) {
                     updateUIForState(AppState.PLANNING)
                     val pathPoints = plannedRun.pathPoints.map { LatLng(it["latitude"]!!, it["longitude"]!!) }
                     if (pathPoints.isNotEmpty()) {
-                        val polylineOptions = PolylineOptions().color(Color.MAGENTA).width(12f).addAll(pathPoints)
-                        plannedRoutePolyline = googleMap?.addPolyline(polylineOptions)
+                        clearMap()
+                        plannedRoutePolyline = googleMap?.addPolyline(PolylineOptions().color(Color.MAGENTA).width(12f).addAll(pathPoints))
 
-                        val boundsBuilder = LatLngBounds.Builder()
-                        for (point in pathPoints) {
-                            boundsBuilder.include(point)
-                        }
-                        val bounds = boundsBuilder.build()
+                        val bounds = LatLngBounds.builder().apply {
+                            pathPoints.forEach { include(it) }
+                        }.build()
                         googleMap?.moveCamera(CameraUpdateFactory.newLatLngBounds(bounds, 100))
 
                         binding.textViewPlanningInstructions.text = "Selected Plan: ${plannedRun.name}"
@@ -306,64 +439,26 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
     }
 
     private fun clearMap() {
-        startMarker?.remove()
-        endMarker?.remove()
-        plannedRoutePolyline?.remove()
+        googleMap?.clear()
         startMarker = null
         endMarker = null
         plannedRoutePolyline = null
+        liveRoutePolyline = null
         plannedDistance = null
-        googleMap?.clear()
-    }
-
-    private fun startTracking() {
-        pathPoints.clear()
-        totalDistance = 0f
-        binding.textViewDistance.text = "Dist: 0.00 km"
-        binding.textViewTime.text = "Time: 00:00"
-        updateUIForState(AppState.TRACKING)
-        startTime = System.currentTimeMillis()
-        timerHandler.postDelayed(timerRunnable, 1000)
-        startLocationUpdates()
-    }
-
-    private fun stopTracking() {
-        updateUIForState(AppState.IDLE)
-        fusedLocationClient.removeLocationUpdates(locationCallback)
-        timerHandler.removeCallbacks(timerRunnable)
-        saveRunToFirebase()
-    }
-
-    private fun saveRunToFirebase() {
-        val userId = auth.currentUser?.uid
-        if (userId != null && pathPoints.isNotEmpty()) {
-            val runData = hashMapOf(
-                "timestamp" to System.currentTimeMillis(),
-                "distanceInMeters" to totalDistance,
-                "timeInMillis" to (System.currentTimeMillis() - startTime),
-                "pathPoints" to pathPoints.map { mapOf("latitude" to it.latitude, "longitude" to it.longitude) }
-            )
-            db.collection("users").document(userId).collection("runs")
-                .add(runData)
-                .addOnSuccessListener { Toast.makeText(this, "Run saved successfully!", Toast.LENGTH_SHORT).show() }
-                .addOnFailureListener { e -> Toast.makeText(this, "Failed to save run: ${e.message}", Toast.LENGTH_SHORT).show() }
-        }
     }
 
     private fun setupLocationCallback() {
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(locationResult: LocationResult) {
-                super.onLocationResult(locationResult)
-                if (currentState == AppState.TRACKING) {
-                    locationResult.locations.forEach { location ->
-                        val newPoint = LatLng(location.latitude, location.longitude)
-                        if (pathPoints.isNotEmpty()) {
-                            totalDistance += calculateDistance(pathPoints.last(), newPoint)
-                        }
-                        pathPoints.add(newPoint)
-                        drawLiveRoute()
-                        updateStats()
+                if (currentState!= AppState.TRACKING) return
+                locationResult.locations.forEach { location ->
+                    val newPoint = LatLng(location.latitude, location.longitude)
+                    if (pathPoints.isNotEmpty()) {
+                        totalDistance += calculateDistance(pathPoints.last(), newPoint)
                     }
+                    pathPoints.add(newPoint)
+                    drawLiveRoute()
+                    updateStats()
                 }
             }
         }
@@ -387,9 +482,9 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
     }
 
     private fun drawLiveRoute() {
-        googleMap?.clear()
+        liveRoutePolyline?.remove()
         val polylineOptions = PolylineOptions().color(Color.BLUE).width(10f).addAll(pathPoints)
-        googleMap?.addPolyline(polylineOptions)
+        liveRoutePolyline = googleMap?.addPolyline(polylineOptions)
     }
 
     private fun updateStats() {
@@ -410,7 +505,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
     }
 
     private fun checkLocationPermission() {
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)!= PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), LOCATION_PERMISSION_REQUEST_CODE)
         } else {
             getDeviceLocation()
@@ -419,15 +514,25 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
 
     private fun getDeviceLocation() {
         try {
+            if (ActivityCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                )!= PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )!= PackageManager.PERMISSION_GRANTED
+            ) {
+                return
+            }
             googleMap?.isMyLocationEnabled = true
             fusedLocationClient.lastLocation.addOnSuccessListener { location ->
-                if (location != null) {
+                if (location!= null) {
                     val currentLatLng = LatLng(location.latitude, location.longitude)
                     googleMap?.moveCamera(CameraUpdateFactory.newLatLngZoom(currentLatLng, 15f))
                 }
             }
         } catch (e: SecurityException) {
-            // Should not happen
+            Log.e("LocationPermission", "Lost location permission.", e)
         }
     }
 
@@ -437,7 +542,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 getDeviceLocation()
             } else {
-                Toast.makeText(this, "Location permission is required to show your position on the map.", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Location permission is required for core functionality.", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -450,12 +555,12 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
     override fun onLowMemory() { super.onLowMemory(); binding.mapView.onLowMemory() }
     override fun onDestroy() {
         super.onDestroy()
+        geoApiContext.shutdown()
+        timerJob?.cancel()
         binding.mapView.onDestroy()
-        geoApiContext.shutdown() // Important to release resources
     }
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         binding.mapView.onSaveInstanceState(outState)
     }
 }
-

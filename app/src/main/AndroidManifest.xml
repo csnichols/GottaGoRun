@@ -16,9 +16,9 @@
         android:theme="@style/Theme.GottaGoRun"
         tools:targetApi="31">
 
-        <!-- This is the new Login screen. It is now the LAUNCHER activity. -->
+        <!-- HomeActivity is now the main entry point -->
         <activity
-            android:name=".LoginActivity"
+            android:name=".HomeActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -26,19 +26,24 @@
             </intent-filter>
         </activity>
 
-        <!-- This is the new Register screen. -->
+        <activity
+            android:name=".LoginActivity"
+            android:exported="false" />
+
         <activity
             android:name=".RegisterActivity"
             android:exported="false" />
 
-        <!-- This is your original main screen. Notice the intent-filter is gone. -->
         <activity
             android:name=".MainActivity"
-            android:exported="true">
-        </activity>
+            android:exported="false" />
 
         <activity
             android:name=".RunHistoryActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".PlannedRoutesActivity"
             android:exported="false" />
 
         <activity
@@ -46,12 +51,24 @@
             android:exported="false" />
 
         <activity
-            android:name=".PlannedRoutesActivity"
+            android:name=".ProfileActivity"
             android:exported="false" />
 
         <meta-data
             android:name="com.google.android.geo.API_KEY"
             android:value="AIzaSyAOI1Fdh--xmSPB41-wUv0h1b1BafzvjTE"/>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
     </application>
+
 
 </manifest>

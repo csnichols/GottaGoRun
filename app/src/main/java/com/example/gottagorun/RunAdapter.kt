@@ -9,7 +9,10 @@ import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
 
-class RunAdapter(private val runs: List<Run>) : RecyclerView.Adapter<RunAdapter.RunViewHolder>() {
+class RunAdapter(
+    private val runs: List<Run>,
+    private val onItemClicked: (Run) -> Unit // Add this click listener parameter
+) : RecyclerView.Adapter<RunAdapter.RunViewHolder>() {
 
     class RunViewHolder(val binding: ItemRunBinding) : RecyclerView.ViewHolder(binding.root)
 
@@ -20,14 +23,13 @@ class RunAdapter(private val runs: List<Run>) : RecyclerView.Adapter<RunAdapter.
 
     override fun onBindViewHolder(holder: RunViewHolder, position: Int) {
         val run = runs[position]
-        val context = holder.itemView.context
 
         // Format Date
         val sdf = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
         holder.binding.textViewRunDate.text = "Date: ${sdf.format(Date(run.timestamp))}"
 
         // Format Distance
-        val distanceInKm = run.distanceInMeters / 1000
+        val distanceInKm = run.distanceInMeters / 1000f
         holder.binding.textViewRunDistance.text = String.format("Distance: %.2f km", distanceInKm)
 
         // Format Time
@@ -35,12 +37,9 @@ class RunAdapter(private val runs: List<Run>) : RecyclerView.Adapter<RunAdapter.
         val seconds = TimeUnit.MILLISECONDS.toSeconds(run.timeInMillis) % 60
         holder.binding.textViewRunTime.text = String.format("Time: %02d:%02d", minutes, seconds)
 
-        // Add this click listener
+        // Set the click listener on the item view
         holder.itemView.setOnClickListener {
-            val intent = Intent(context, RunDetailActivity::class.java).apply {
-                putExtra("RUN_ID", run.documentId)
-            }
-            context.startActivity(intent)
+            onItemClicked(run)
         }
     }
 

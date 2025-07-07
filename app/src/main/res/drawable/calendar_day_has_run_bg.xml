@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <!-- This uses the primary container color, which is a light blue,
+         with 50% transparency (80 in hex) -->
+    <solid android:color="#80C7E7FF" />
+</shape>

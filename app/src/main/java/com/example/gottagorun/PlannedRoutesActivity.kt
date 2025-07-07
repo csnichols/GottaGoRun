@@ -24,6 +24,10 @@ class PlannedRoutesActivity : AppCompatActivity() {
         binding = ActivityPlannedRoutesBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        setSupportActionBar(binding.toolbarLayout.toolbar)
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        supportActionBar?.title = "Planned Routes"
+
         auth = FirebaseAuth.getInstance()
         db = FirebaseFirestore.getInstance()
 
@@ -31,13 +35,17 @@ class PlannedRoutesActivity : AppCompatActivity() {
         fetchPlannedRuns()
     }
 
+    override fun onSupportNavigateUp(): Boolean {
+        onBackPressed()
+        return true
+    }
+
     private fun setupRecyclerView() {
         plannedRunAdapter = PlannedRunAdapter(plannedRunsList) { selectedRun ->
-            // This code runs when a user clicks an item in the list
             val resultIntent = Intent()
             resultIntent.putExtra("SELECTED_RUN_ID", selectedRun.documentId)
             setResult(Activity.RESULT_OK, resultIntent)
-            finish() // Close this screen and return to MainActivity
+            finish()
         }
         binding.recyclerViewPlannedRuns.apply {
             adapter = plannedRunAdapter

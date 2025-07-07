@@ -17,7 +17,26 @@
         <item name="colorSurfaceVariant">@color/md_theme_surfaceVariant</item>
         <item name="colorOnSurfaceVariant">@color/md_theme_onSurfaceVariant</item>
         <item name="colorOutline">@color/md_theme_outline</item>
+        <item name="colorError">#B00020</item>
+
     </style>
 
     <style name="Theme.GottaGoRun" parent="Base.Theme.GottaGoRun" />
+
+    <!-- This is a custom style specifically for our toolbar -->
+    <style name="Widget.App.Toolbar" parent="Widget.Material3.Toolbar">
+        <item name="navigationIconTint">?attr/colorPrimary</item> <!-- For the home/up icon -->
+        <item name="titleTextColor">?attr/colorPrimary</item>
+        <item name="android:theme">@style/ThemeOverlay.App.Toolbar</item> <!-- Theme for menu items -->
+    </style>
+
+    <style name="ThemeOverlay.App.Toolbar" parent="">
+        <!-- This will tint the menu icons (overflow, etc.) -->
+        <item name="android:textColorSecondary">?attr/colorPrimary</item>
+    </style>
+
 </resources>
+
+
+
+

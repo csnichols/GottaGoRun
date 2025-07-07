@@ -30,6 +30,7 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+        isCoreLibraryDesugaringEnabled = true
     }
     kotlinOptions {
         jvmTarget = "11"
@@ -59,4 +60,10 @@ dependencies {
     implementation(libs.location.services)
     implementation(libs.maps.services)
     implementation(libs.maps.utils)
+    implementation(libs.mpandroidchart)
+    implementation(libs.calendar.view)
+    coreLibraryDesugaring(libs.android.desugar.jdk.libs)
+    implementation(libs.coil)
+    implementation(libs.circleimageview)
+
 }
